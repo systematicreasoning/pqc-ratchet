@@ -579,7 +579,20 @@ Leakage Secure, and Deniable," which covers a different but related construction
 
 ## What is not implemented
 
-**Header encryption.** The sender's ratchet public key is transmitted in cleartext.
+**Header encryption.** The sender's ratchet public key and KEM ciphertexts are
+transmitted in cleartext. An observer can correlate messages to sessions and track
+message ordering within a session. Header encryption (as in Signal's Sesame protocol)
+would require a separate header ratchet and is not implemented.
+
+**Formal machine-checked verification of the X3DH handshake.** The Double Ratchet
+implementation rests on the ACD19 composition theorem, which provides a formal proof
+framework. The X3DH handshake follows the structure of Hashimoto et al. (PKC 2022) and
+the security argument is sound, but the specific byte-level transcript protocol — the
+exact concatenation of `IK_A.ex || CT1 || CT2 || EK_A.pub [|| CT4]` — has not been
+verified with a symbolic model checker such as ProVerif or CryptoVerif. Signal's PQXDH
+underwent exactly this treatment (Bhargavan et al., USENIX Security 2024), which found
+two issues that were then fixed. A comparable analysis of pqcratchet's handshake would
+be the highest-value independent verification work remaining.
 
 All HKDF operations use SHA-256. The info strings are:
 
