@@ -1,0 +1,32 @@
+# Duvet requirements traceability configuration.
+# https://github.com/awslabs/duvet
+#
+# The annotations in this package trace implementation choices back to the
+# normative specifications they implement. Two IETF RFCs have machine-readable
+# annotations in the source:
+#
+#   RFC 5869 (HKDF)   — https://www.rfc-editor.org/rfc/rfc5869
+#   RFC 7748 (X25519)  — https://www.rfc-editor.org/rfc/rfc7748
+#
+# The Signal X3DH and Double Ratchet specs and the ePrint research papers
+# (ACD19, CRT24, Hashimoto et al.) are prose documents without RFC-format
+# normative requirements; they are cited in comments using plain URLs and
+# cannot be traced by duvet.
+#
+# To generate a coverage report:
+#   cargo install duvet --locked
+#   duvet report
+#
+# Annotation format used in source files:
+#   //= https://www.rfc-editor.org/rfc/rfc5869#section-2.2
+#   (inline URL-only annotations, no quoted text, because the Signal specs
+#    and research papers that govern most decisions are not RFC-parseable)
+
+[source]
+patterns = ["pqcratchet/**/*.go"]
+
+[[specs]]
+url = "https://www.rfc-editor.org/rfc/rfc5869"
+
+[[specs]]
+url = "https://www.rfc-editor.org/rfc/rfc7748"
