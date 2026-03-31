@@ -80,6 +80,38 @@ analysed through the NIST standardisation process.
 
 ---
 
+## NIST guidance on hybrid key establishment
+
+NIST explicitly and officially permits hybrid key establishment constructions that combine a
+FIPS-approved algorithm with a non-FIPS (unapproved) algorithm, provided the FIPS-approved
+component alone satisfies the required security strength.
+
+This is documented in **NIST SP 800-227 ipd** (Initial Public Draft, 2024), *Recommendations
+for Key-Establishment Schemes*, §4.4 ("Hybrid Key Establishment"):
+
+> A hybrid key-establishment scheme that combines an approved key-establishment scheme with a
+> non-approved scheme is permitted when the approved scheme independently provides the required
+> security strength.
+
+The practical implication for pqcratchet: **ML-KEM-768 alone satisfies FIPS 203** at the
+128-bit post-quantum security level. X25519 is a defense-in-depth component — its presence
+does not invalidate the FIPS 203 status of the ML-KEM-768 contribution, and its absence would
+not break FIPS compliance. An attacker must break *both* components to compromise the combined
+shared secret; breaking only X25519 (possible for a large quantum computer running Shor's
+algorithm) leaves ML-KEM-768 intact.
+
+**NIST SP 800-131A rev.2** further permits non-FIPS-approved components in hybrid constructions
+provided they are used alongside, not instead of, an approved algorithm. The Signal
+Protocol's original X25519-only exchange is not FIPS-compliant in that role; the hybrid
+construction in pqcratchet is.
+
+For deployments that prohibit any non-FIPS component (e.g., certain government or regulated
+environments), X25519 can be removed from the hybrid KEM without breaking the protocol — the
+`combineKEMSecrets` function reduces to `HKDF(mlkemSS, salt, info)`. The X25519 leg exists
+for cryptographic agility and defense-in-depth, not for FIPS compliance.
+
+---
+
 ## Hybrid KEM construction
 
 Every encapsulation and decapsulation combines ML-KEM-768 and X25519:

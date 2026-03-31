@@ -298,7 +298,11 @@ type PreKeyMessageWire struct {
 	SignedMessageBytes []byte // nil if no bundled message
 }
 
-const noOneTimePreKey = uint32(0xFFFFFFFF)
+// NoOneTimePreKey is the sentinel value for PreKeyMessageWire.OneTimePreKeyIndex
+// when no one-time pre-key is included in the bundle.
+const NoOneTimePreKey = uint32(0xFFFFFFFF)
+
+const noOneTimePreKey = NoOneTimePreKey
 
 // MarshalPreKeyMessageWire serialises a PreKeyMessageWire.
 func MarshalPreKeyMessageWire(m *PreKeyMessageWire) []byte {

@@ -23,6 +23,20 @@ asymmetric primitives with NIST PQC standards, while keeping the symmetric ratch
 | Message authentication | HMAC-SHA-256 | FIPS 198 |
 | KDF | HKDF-SHA-256 | SP 800-56C |
 
+## NIST position on hybrid key establishment
+
+NIST SP 800-227 ipd (2024) explicitly permits hybrid key establishment constructions that
+combine a FIPS-approved algorithm with a non-FIPS algorithm, provided the FIPS-approved
+component alone meets the required security strength:
+
+> A hybrid key-establishment scheme combining an approved scheme with a non-approved scheme
+> is permitted when the approved scheme independently provides the required security strength.
+
+**ML-KEM-768 alone satisfies FIPS 203.** X25519 is defense-in-depth — present for
+cryptographic agility, not for FIPS compliance. Its inclusion does not invalidate the
+FIPS 203 status of the ML-KEM-768 contribution. For strict FIPS-only deployments the
+X25519 leg can be removed without changing the rest of the protocol.
+
 ## Why not Signal's PQXDH?
 
 Signal deployed [PQXDH][pqxdh] in 2023 as their production PQ handshake. pqcratchet
