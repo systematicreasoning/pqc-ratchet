@@ -211,21 +211,26 @@ func CreateSessionResponder(identity *Identity, msg *PreKeyMessage) (*Session, e
 		return nil, fmt.Errorf("signed pre-key %d not found", msg.SignedPreKeyIndex)
 	}
 
+	// Reserve the one-time pre-key under identity.mu to prevent concurrent
+	// CreateSessionResponder calls from observing the same OPK as non-nil
+	// and reusing it (TOCTOU / double-use). The slot is set to nil while
+	// holding the lock; on AuthenticateB failure it is restored (also under
+	// the lock) so unauthenticated or malformed requests do not permanently
+	// consume a key.
 	var oneTimePreKeyPriv *HybridKEMPrivateKey
 	var oneTimePreKeyKP *HybridKEMKeyPair // held for zeroing after use
 	var oneTimePreKeyIndex int = -1
+	identity.mu.Lock()
 	if msg.OneTimePreKeyIndex >= 0 && msg.OneTimePreKeyIndex < len(identity.PreKeys) {
 		kp := identity.PreKeys[msg.OneTimePreKeyIndex]
 		if kp != nil {
 			oneTimePreKeyPriv = &kp.Private
 			oneTimePreKeyKP = kp
 			oneTimePreKeyIndex = msg.OneTimePreKeyIndex
-			// Nil the slot immediately so no other goroutine can reuse this OPK
-			// concurrently. If AuthenticateB fails below we restore the slot so
-			// the key is not permanently lost to an unauthenticated request.
 			identity.PreKeys[msg.OneTimePreKeyIndex] = nil
 		}
 	}
+	identity.mu.Unlock()
 
 	signedPreKP := identity.SignedPreKeys[msg.SignedPreKeyIndex]
 
@@ -245,7 +250,14 @@ func CreateSessionResponder(identity *Identity, msg *PreKeyMessage) (*Session, e
 		// permanently consumed by an unauthenticated or malformed request.
 		// The private key bytes have not been zeroed yet so restoration is safe.
 		if oneTimePreKeyIndex >= 0 {
-			identity.PreKeys[oneTimePreKeyIndex] = oneTimePreKeyKP
+			identity.mu.Lock()
+			// Only restore if the slot is still nil; a concurrent legitimate
+			// session may have already consumed another OPK at this index
+			// (shouldn't happen given monotonic index assignment, but be safe).
+			if identity.PreKeys[oneTimePreKeyIndex] == nil {
+				identity.PreKeys[oneTimePreKeyIndex] = oneTimePreKeyKP
+			}
+			identity.mu.Unlock()
 		}
 		return nil, fmt.Errorf("x3dh responder: %w", err)
 	}
