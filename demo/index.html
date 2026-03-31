@@ -5211,6 +5211,8 @@ async function sendMsg(from, text) {
       ],
     });
 
+    highlightCodeLines('encrypt_' + from);
+
     // Deliver and decrypt
     const sm = unmarshalSignedMessage(wire);
     const pt = await remote.decryptMessage(
@@ -5347,8 +5349,10 @@ const CODE_HIGHLIGHTS = {
 // Minimal token-based highlighter for display-only JS
 function highlight(code) {
   // Process line by line to support per-line spans
+  // Inline escHtml to avoid ordering dependency
+  const _esc = s => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
   return code.split('\n').map(line => {
-    let h = escHtml(line);
+    let h = _esc(line);
     // Order matters: comments first (greedy), then strings, then keywords/fns
     h = h.replace(/(\/\/.*)/g, '<span class="cmt">$1</span>');
     h = h.replace(/(&#39;[^&#]*&#39;|&quot;[^&]*&quot;|`[^`]*`)/g,
@@ -5573,39 +5577,54 @@ function toggleCode() {
 function highlightCodeLines(action) {
   const map = CODE_HIGHLIGHTS[action];
   if (!map) return;
+
+  // Open the code panel if it's closed — let users see live progression
+  const wrap = document.getElementById('codePanels');
+  const hdr  = document.getElementById('codeToggle');
+  if (wrap && !wrap.classList.contains('open')) {
+    wrap.classList.add('open');
+    hdr && hdr.classList.add('open');
+    // Render default tabs on first open if not already done
+    if (!document.getElementById('alice-code-body').innerHTML) {
+      showCodeTab('alice', 'session');
+      showCodeTab('bob',   'session');
+    }
+  }
+
   for (const who of ['alice','bob']) {
     const ids = map[who] || [];
-    // Get current tab's lines
+    if (!ids.length) continue;
+
+    // Find which tab contains these line IDs
+    let targetTab = null;
+    const tabs = Object.keys(SNIPPETS[who]);
+    for (const tab of tabs) {
+      if (SNIPPETS[who][tab].some(l => ids.includes(l.id))) {
+        targetTab = tab;
+        break;
+      }
+    }
+
+    // Switch to the right tab (renders the lines into the DOM)
+    if (targetTab && codeTabs[who] !== targetTab) {
+      showCodeTab(who, targetTab);
+    }
+
+    // Now highlight — lines are guaranteed to be in the DOM
     const body = document.getElementById(`${who}-code-body`);
     if (!body) continue;
-    // Remove existing highlights
-    body.querySelectorAll('.cl').forEach(el => {
-      el.classList.remove('hl', 'hl-alice', 'hl-bob');
-    });
-    if (!ids.length) continue;
+    body.querySelectorAll('.cl').forEach(el =>
+      el.classList.remove('hl', 'hl-alice', 'hl-bob')
+    );
     ids.forEach(id => {
       body.querySelectorAll(`.cl[data-lid="${id}"]`).forEach(el => {
         el.classList.add('hl', `hl-${who}`);
       });
     });
-    // Auto-switch to relevant tab if current tab has no highlights
-    const hasVisible = body.querySelectorAll('.cl.hl').length > 0;
-    if (!hasVisible) {
-      // Find which tab has lines for these ids
-      const tabs = Object.keys(SNIPPETS[who]);
-      for (const tab of tabs) {
-        const hasId = SNIPPETS[who][tab].some(l => ids.includes(l.id));
-        if (hasId) { showCodeTab(who, tab); break; }
-      }
-      // Re-apply highlight after tab switch
-      setTimeout(() => {
-        ids.forEach(id => {
-          body.querySelectorAll(`.cl[data-lid="${id}"]`).forEach(el => {
-            el.classList.add('hl', `hl-${who}`);
-          });
-        });
-      }, 50);
-    }
+
+    // Scroll the first highlighted line into view
+    const first = body.querySelector('.cl.hl');
+    if (first) first.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
   }
 }
 
