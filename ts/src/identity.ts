@@ -123,9 +123,13 @@ export async function createSessionInitiator(
     bundle.identitySigningPub,
   );
 
-  // Initiator needs to set the remote ratchet key so the first send can encapsulate
+  // Initiator needs to set the remote ratchet key so the first send can encapsulate.
+  // Alice's initial remote ratchet key is Bob's signed pre-key (not his exchange key).
+  // This matches Go: CurrentStep.RemoteRatchetKey = bundle.SignedPreKeyPub.
+  // Bob's initial ratchet KP is also this signed pre-key, so Alice's encapsulation
+  // against it produces the shared secret Bob decapsulates with his SPK private key.
   session.currentStep = {
-    remoteRatchetKey: bundle.identityExchangePub, // Bob's initial ratchet key
+    remoteRatchetKey: bundle.signedPreKeyPub, // Bob's SPK = initial remote ratchet key
     epochRatchetCT: null,
     sendingChain: null,
     receivingChain: null,
@@ -210,10 +214,14 @@ export async function createSessionResponder(
   // AD = Encode(IK_A.ex) || Encode(IK_B.ex)
   const ad = concat(msg.identityExchangePub, responderIdentity.exchangeKey.publicKey);
 
-  // Session: Bob starts with his exchange key as ratchet key
+  // Bob's initial ratchet keypair is the signed pre-key used in X3DH.
+  // Alice encapsulates against this key to derive the first receiving chain.
+  // This matches Go: RatchetKP = signedPreKP (not exchangeKey).
+  // (signedPreKP was already declared above for authenticateB)
+
   const session = new Session(
     rootKey,
-    responderIdentity.exchangeKey, // Bob's initial ratchet keypair
+    signedPreKP, // Bob's initial ratchet KP = the signed pre-key used in X3DH
     ad,
     msg.identitySigningPub,
     responderIdentity.signingKey.publicKey,

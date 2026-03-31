@@ -45,7 +45,6 @@ export const CIPHER_KEY_KDF_INPUT = new Uint8Array([0x01]);
 export const ROOT_KEY_KDF_INPUT = new Uint8Array([0x02]);
 
 // Wire protocol version
-export const WIRE_VERSION = 0x01;
 
 // Max ciphertext size (1 MiB)
 export const MAX_CIPHERTEXT_SIZE = 1024 * 1024;

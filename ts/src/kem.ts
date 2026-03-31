@@ -173,3 +173,35 @@ async function combineKEMSecrets(
   const salt = await sha256(recipientPub);
   return hkdf(ikm, salt, INFO_HYBRID_KEM, 32);
 }
+
+/**
+ * kemKeyPairFromGoSeed reconstructs a TS HybridKEMKeyPair from a Go-serialised
+ * 96-byte private key (64-byte ML-KEM seed || 32-byte X25519 scalar).
+ *
+ * Go stores the compact seed form; TS decapsulate needs the 2400-byte expanded
+ * ML-KEM secretKey. This function expands it via ml_kem768.keygen(seed).
+ *
+ * Use this when importing identities exported by the Go implementation.
+ */
+export function kemKeyPairFromGoSeed(goPriv: Uint8Array): HybridKEMKeyPair {
+  if (goPriv.length !== MLKEM_KEY_SEED_SIZE + X25519_KEY_SIZE) {
+    throw new Error(
+      `pqcratchet: Go private key must be ${MLKEM_KEY_SEED_SIZE + X25519_KEY_SIZE} bytes, got ${goPriv.length}`
+    );
+  }
+  const mlkemSeed = goPriv.slice(0, MLKEM_KEY_SEED_SIZE);
+  const x25519Priv = goPriv.slice(MLKEM_KEY_SEED_SIZE);
+
+  const { publicKey: mlkemPub, secretKey: mlkemPrivExpanded } = ml_kem768.keygen(mlkemSeed);
+  const x25519Pub = x25519.getPublicKey(x25519Priv);
+
+  const publicKey = new Uint8Array(HYBRID_PUBLIC_KEY_SIZE);
+  publicKey.set(mlkemPub, 0);
+  publicKey.set(x25519Pub, MLKEM_PUBLIC_KEY_SIZE);
+
+  const privateKey = new Uint8Array(HYBRID_PRIVATE_KEY_SIZE_TS);
+  privateKey.set(mlkemPrivExpanded, 0);
+  privateKey.set(x25519Priv, MLKEM_SECRET_KEY_SIZE);
+
+  return { publicKey, privateKey };
+}

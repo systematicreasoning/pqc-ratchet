@@ -193,7 +193,7 @@ export class Session {
     const keys = await deriveMessageKeys(cipherKey);
 
     // Verify outer HMAC first
-    const hmacInput = buildHMACInput(this.ad, this.initiatorSigningKeyBytes, this.responderSigningKeyBytes, messageRaw);
+    const hmacInput = concat(this.ad, this.initiatorSigningKeyBytes, this.responderSigningKeyBytes, messageRaw);
     const expectedHMAC = await hmacSHA256(keys.hmacKey, hmacInput);
     if (!constantTimeEqual(hmacSignature, expectedHMAC)) {
       throw new Error(ERR_HMAC_VERIFY_FAILED);
@@ -272,15 +272,6 @@ function equalBytes(a: Uint8Array, b: Uint8Array): boolean {
   if (a.length !== b.length) return false;
   for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
   return true;
-}
-
-export function buildHMACInput(
-  ad: Uint8Array,
-  initiatorSigKey: Uint8Array,
-  responderSigKey: Uint8Array,
-  messageRaw: Uint8Array,
-): Uint8Array {
-  return concat(ad, initiatorSigKey, responderSigKey, messageRaw);
 }
 
 interface SessionSnapshot {
