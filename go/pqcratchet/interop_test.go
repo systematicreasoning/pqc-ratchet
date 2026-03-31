@@ -32,8 +32,9 @@ func TestInteropGoTS(t *testing.T) {
 
 	// Locate the TS repo relative to this file.
 	_, thisFile, _, _ := runtime.Caller(0)
+	// In the monorepo layout: go/pqcratchet/ → go/ → repo root → ts/
 	goRepo := filepath.Dir(filepath.Dir(thisFile))
-	tsRepo := filepath.Join(filepath.Dir(goRepo), "pqc-ratchet-ts")
+	tsRepo := filepath.Join(filepath.Dir(goRepo), "ts")
 	tsScript := filepath.Join(tsRepo, "scripts", "interop_verify.mjs")
 	tsDist := filepath.Join(tsRepo, "dist", "index.js")
 
