@@ -1,0 +1,26 @@
+{
+  "name": "@peculiarventures/pqc-ratchet",
+  "version": "0.1.0",
+  "description": "Post-quantum Double Ratchet + X3DH in TypeScript (ML-KEM-768, ML-DSA-65). Wire-compatible with github.com/PeculiarVentures/pqc-ratchet.",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "node --experimental-vm-modules node_modules/.bin/jest",
+    "test:coverage": "node --experimental-vm-modules node_modules/.bin/jest --coverage"
+  },
+  "keywords": ["post-quantum", "double-ratchet", "x3dh", "ml-kem", "ml-dsa", "signal", "e2ee"],
+  "license": "MIT",
+  "dependencies": {
+    "@noble/post-quantum": "^0.6.0",
+    "@noble/curves": "^1.4.0",
+    "@noble/hashes": "^1.4.0"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.12",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.4",
+    "typescript": "^5.4.5"
+  }
+}
