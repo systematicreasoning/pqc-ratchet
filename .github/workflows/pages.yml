@@ -1,0 +1,32 @@
+name: Deploy demo to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'demo/**'
+      - '.github/workflows/pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy demo/ to docs/
+        run: |
+          rm -rf docs
+          cp -r demo docs
+
+      - name: Commit docs/
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/
+          # Only commit if there are changes
+          git diff --cached --quiet || git commit -m "ci: update docs/ from demo/ [skip ci]"
+          git push
