@@ -296,6 +296,79 @@
   .num { color: #f78c6c; }
   .cmt { color: var(--dim); font-style: italic; }
   .prop { color: #89ddff; }
+
+  /* ── Approval modal ── */
+  .approval-overlay {
+    display: none; position: fixed; inset: 0;
+    background: rgba(0,0,0,.7); z-index: 200;
+    align-items: center; justify-content: center;
+    backdrop-filter: blur(4px);
+  }
+  .approval-overlay.show { display: flex; }
+  .approval-modal {
+    background: var(--surface); border: 1px solid var(--border2);
+    border-radius: 12px; padding: 28px 32px; max-width: 420px; width: 90%;
+    box-shadow: 0 24px 80px rgba(0,0,0,.6);
+    animation: modalIn .2s ease;
+  }
+  @keyframes modalIn {
+    from { opacity:0; transform: scale(.96) translateY(8px); }
+    to   { opacity:1; transform: scale(1)  translateY(0); }
+  }
+  .approval-title {
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .1em;
+    color: var(--bob); margin-bottom: 4px;
+  }
+  .approval-subtitle {
+    font-size: 13px; color: var(--text); margin-bottom: 20px; line-height: 1.5;
+  }
+  .approval-fp-wrap {
+    background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 8px; padding: 16px; margin-bottom: 20px; text-align: center;
+  }
+  .approval-fp-label {
+    font-family: var(--mono); font-size: 10px; color: var(--dim);
+    text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px;
+  }
+  .approval-fp-digits {
+    display: flex; gap: 6px; justify-content: center; margin-bottom: 10px;
+  }
+  .approval-fp-digit {
+    font-family: var(--mono); font-size: 20px; font-weight: 600;
+    color: var(--warn); background: rgba(251,191,36,.1);
+    border: 1px solid rgba(251,191,36,.35); border-radius: 6px;
+    width: 32px; height: 38px; display: flex; align-items: center; justify-content: center;
+  }
+  .approval-fp-sep {
+    font-family: var(--mono); font-size: 20px; color: var(--dim); align-self: center;
+  }
+  .approval-fp-note {
+    font-family: var(--mono); font-size: 10px; color: var(--dim); line-height: 1.6;
+  }
+  .approval-why {
+    font-size: 12px; color: var(--muted); line-height: 1.6;
+    border-left: 2px solid var(--border2); padding-left: 12px;
+    margin-bottom: 24px;
+  }
+  .approval-why strong { color: var(--text); }
+  .approval-btns { display: flex; gap: 10px; }
+  .btn-approve {
+    flex: 1; background: var(--bob-dim); color: var(--bob);
+    border: 1px solid var(--bob-mid); font-family: var(--mono);
+    font-size: 12px; font-weight: 600; padding: 10px;
+    border-radius: 6px; cursor: pointer; transition: all .15s;
+    letter-spacing: .05em;
+  }
+  .btn-approve:hover { background: var(--bob-mid); }
+  .btn-reject-session {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--border2); font-family: var(--mono);
+    font-size: 12px; padding: 10px 16px;
+    border-radius: 6px; cursor: pointer; transition: all .15s;
+  }
+  .btn-reject-session:hover { color: #f87171; border-color: #f87171; }
+
 </style>
 </head>
 <body>
@@ -500,6 +573,38 @@
     </div>
   </div>
 
+
+  <!-- ── Approval modal ─────────────────────────────────────── -->
+  <div class="approval-overlay" id="approvalModal">
+    <div class="approval-modal">
+      <div class="approval-title">🟢 Bob — Incoming Session Request</div>
+      <div class="approval-subtitle">
+        Alice wants to establish a secure session with you.
+        Verify the identity fingerprint matches what Alice sees before approving.
+      </div>
+      <div class="approval-fp-wrap">
+        <div class="approval-fp-label">Identity Fingerprint · SHA-256(Alice‖Bob exchange keys)[0..3]</div>
+        <div class="approval-fp-digits" id="modalPinDigits">
+          <!-- filled by JS -->
+        </div>
+        <div class="approval-fp-note">
+          Both sides computed this from your exchange public keys.<br>
+          A man-in-the-middle would produce a <em>different</em> value.
+        </div>
+      </div>
+      <div class="approval-why">
+        <strong>Why does this matter?</strong>
+        This fingerprint proves Alice's public key binding is genuine.
+        In production you'd verify this over a separate channel
+        (voice call, in-person, QR scan) before clicking Approve.
+        This demo simulates that trust decision.
+      </div>
+      <div class="approval-btns">
+        <button class="btn-reject-session" onclick="rejectSession()">✕ Reject</button>
+        <button class="btn-approve" onclick="approveSession()">✓ Approve Session</button>
+      </div>
+    </div>
+  </div>
 </main>
 
 <script type="module">
@@ -5140,11 +5245,9 @@ async function establish() {
     }
 
     // Enable compose
-    for (const who of ['alice','bob']) {
-      document.getElementById(who+'-input').disabled = false;
-      document.getElementById(who+'-send').disabled  = false;
-    }
+    // Don't enable messaging yet — show Bob's approval modal first
     document.getElementById('setupBar').style.display = 'none';
+    showApprovalModal(pin);
 
     setStatus(`Session established · Session PIN: ${pin.slice(0,4)} · ${pin.slice(4)} · both sides derived same root key without transmitting it`, 'ok');
     return true;
@@ -5271,6 +5374,9 @@ async function autoDemo() {
   const ok = await establish();
   if (!ok) { document.getElementById('autoBtn').disabled = false; return; }
   markStep(0, 'done');
+  // Auto-approve session for scripted demo
+  await sleep(600);
+  approveSession();
   await sleep(600);
 
   for (let i = 0; i < SCRIPT.length; i++) {
@@ -5319,6 +5425,8 @@ function resetDemo() {
   document.getElementById('autoBtn').disabled=false;
   document.getElementById('autoProgress').classList.remove('show');
   for (let i=0;i<7;i++) markStep(i,'');
+  // Close approval modal if open
+  document.getElementById('approvalModal').classList.remove('show');
   document.getElementById('statusDot').className='status-dot';
   document.getElementById('statusText').textContent='Ready — establish a session or run the auto demo';
 }
@@ -5347,7 +5455,7 @@ const SRC = {
     { id:'a-gen', code:`  2,   // signed pre-keys to generate` },
     { id:'a-gen', code:`  5    // one-time pre-keys to generate` },
     { id:'a-gen', code:`);` },
-    { div: 'Build session from Bob's public bundle' },
+    { div: "Build session from Bob's public bundle" },
     { id:'a-sess', code:`const bundle = await fetchBobBundle();  // from key server` },
     { id:'a-sess', code:`` },
     { id:'a-sess', code:`const { session, preKeyMessage } =` },
@@ -5375,7 +5483,7 @@ const SRC = {
     { id:'a-enc', code:`await sendToBob(marshalSignedMessage(inner, sig));` },
     { id:'a-enc', code:`// enc.ratchetCT is non-null on first send of a new epoch:` },
     { id:'a-enc', code:`//   fresh ML-KEM-768 encapsulation, advancing the ratchet` },
-    { div: 'Decrypt Bob's reply' },
+    { div: "Decrypt Bob's reply" },
     { id:'a-dec', code:`const sm = unmarshalSignedMessage(await receiveFromBob());` },
     { id:'a-dec', code:`` },
     { id:'a-dec', code:`const plain = await session.decryptMessage(` },
@@ -5406,7 +5514,7 @@ const SRC = {
     { id:'b-gen', code:`  signedPreKeySig:     bob.signedPreKeySigs[0],` },
     { id:'b-gen', code:`  oneTimePreKeyPub:    bob.preKeys[0].publicKey,` },
     { id:'b-gen', code:`});` },
-    { div: 'Establish session from Alice's PreKeyMessage' },
+    { div: "Establish session from Alice's PreKeyMessage" },
     { id:'b-sess', code:`const pkmBytes = await receiveFromAlice();` },
     { id:'b-sess', code:`const pkm = unmarshalPreKeyMessageWire(pkmBytes);` },
     { id:'b-sess', code:`` },
@@ -5419,7 +5527,7 @@ const SRC = {
     { id:'b-pin', code:`const pin = [...new Uint8Array(hash).slice(0,4)]` },
     { id:'b-pin', code:`  .map(b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();` },
     { id:'b-pin', code:`// → "8A3FC291"  (matches Alice — confirm before trusting)` },
-    { div: 'Decrypt Alice's message' },
+    { div: "Decrypt Alice's message" },
     { id:'b-dec', code:`const sm = unmarshalSignedMessage(await receiveFromAlice());` },
     { id:'b-dec', code:`` },
     { id:'b-dec', code:`const plain = await session.decryptMessage(` },
@@ -5561,7 +5669,58 @@ function highlightCodeLines(action) {
 window.toggleCode         = toggleCode;
 window.highlightCodeLines = highlightCodeLines;
 
+
+// ═══════════════════════════════════════════════════════════
+// Approval modal
+// ═══════════════════════════════════════════════════════════
+
+function showApprovalModal(pin) {
+  // Fill in the PIN digits
+  const wrap = document.getElementById('modalPinDigits');
+  wrap.innerHTML = '';
+  pin.split('').forEach((ch, i) => {
+    if (i === 4) {
+      const sep = document.createElement('span');
+      sep.className = 'approval-fp-sep';
+      sep.textContent = '-';
+      wrap.appendChild(sep);
+    }
+    const d = document.createElement('div');
+    d.className = 'approval-fp-digit';
+    d.textContent = ch;
+    wrap.appendChild(d);
+  });
+
+  document.getElementById('approvalModal').classList.add('show');
+  setStatus('Bob: verify the identity fingerprint matches Alice's display, then approve or reject', 'busy');
+}
+
+function approveSession() {
+  document.getElementById('approvalModal').classList.remove('show');
+  // Now enable messaging on both sides
+  for (const who of ['alice','bob']) {
+    document.getElementById(who+'-input').disabled = false;
+    document.getElementById(who+'-send').disabled  = false;
+  }
+  // Mark Bob's PIN as verified
+  const verEl = document.getElementById('bob-pin-verified');
+  if (verEl) verEl.classList.add('show');
+
+  setStatus(`Session approved · fingerprint verified · Session PIN: ${S.sessionPIN ? S.sessionPIN.slice(0,4)+'-'+S.sessionPIN.slice(4) : '…'} · type messages or run Auto Demo`, 'ok');
+  highlightCodeLines('pin');
+}
+
+function rejectSession() {
+  document.getElementById('approvalModal').classList.remove('show');
+  setStatus('Session rejected — reset and try again', 'err');
+  // Re-enable the establish button so they can try again
+  document.getElementById('establishBtn').disabled = false;
+  document.getElementById('autoBtn').disabled = false;
+}
+
 window.establish=establish;
+window.approveSession=approveSession;
+window.rejectSession=rejectSession;
 window.sendMsg=sendMsg;
 window.autoDemo=autoDemo;
 window.resetDemo=resetDemo;
