@@ -5141,8 +5141,14 @@ function updateStateDisplay(who, sess) {
   // Epoch badge — shows current epoch number and colour
   const epochEl = document.getElementById(who + '-epoch');
   epochEl.style.display = '';
-  epochEl.textContent   = 'epoch ' + S.epochCount;
+  epochEl.textContent   = S.epochCount === 0 ? 'initial'
+    : 'turn ' + S.epochCount;
   epochEl.className     = 'epoch-badge ' + epochCls(S.epochCount);
+  // Tooltip: explain what a "turn" is
+  epochEl.title = S.epochCount === 0
+    ? 'Initial state — X3DH session established'
+    : `Turn ${S.epochCount}: the sender direction changed ${S.epochCount} time(s).`
+      + ' Each turn = fresh ML-KEM-768 keypair + new shared secret + root key re-derived.';
 }
 
 
@@ -5255,8 +5261,8 @@ function addBubble(who, text, meta) {
     <div class="msg-text">${esc(text)}</div>
     <div class="msg-meta">
       <span class="msg-counter">msg #${meta.counter}</span>
-      <span class="msg-epoch ${ec} ${ec}-bg">epoch ${meta.epoch}</span>
-      ${meta.newEpoch ? '<span class="msg-new-epoch">⚡ new epoch</span>' : ''}
+      <span class="msg-epoch ${ec} ${ec}-bg">${meta.epoch === 0 ? 'turn 0' : 'turn ' + meta.epoch}</span>
+      ${meta.newEpoch ? '<span class="msg-new-epoch">🔑 new key exchange</span>' : ''}
       <span class="msg-expand">▾ details</span>
     </div>
     <div class="msg-details" id="bd${bid}">
@@ -5520,22 +5526,32 @@ async function sendMsg(from, text) {
     // Step 4 — wrap in signed envelope
     const wire = marshalSignedMessage(inner, hmacSig);
 
-    // Detect new ratchet epoch: the sender changed direction.
-    // Each time Alice→Bob or Bob→Alice switches, that's a new KEM epoch
-    // because the new sender generates a fresh ephemeral keypair and
-    // encapsulates against the previous sender's ratchet key.
-    // We track the last sender to detect the switch.
+    // Detect a new ratchet epoch.
+    //
+    // The KEM ratchet advances when a sender starts a NEW sending chain:
+    //   enc.ratchetCT !== null  = a new KEM ciphertext was generated
+    //   enc.counter === 0       = first message of this sending chain
+    //
+    // This happens when the sender changes direction (Alice→Bob→Alice)
+    // because decryptMessage sets sendingChain=null on the new step,
+    // forcing the next encryptMessage to create a fresh keypair.
+    //
+    // We also track S.lastSender to show "direction changed" in the UI.
+    const directionChanged = from !== S.lastSender && S.lastSender !== null;
     const newEpoch = enc.ratchetCT !== null && enc.counter === 0;
     if (newEpoch) S.epochCount++;
     const epoch = S.epochCount;
-    S.lastSender = from;  // track for display purposes
+    S.lastSender = from;
     const nowTs = ts();
 
     // Add to wire log
     addWireEntry({
       ts: nowTs, from,
       type: `Message (counter=${enc.counter})`,
-      epoch, epochLabel: `epoch ${epoch}`,
+      epoch,
+      epochLabel: epoch === 0 ? 'session setup'
+                : newEpoch   ? `turn ${epoch} · new keys`
+                :               `turn ${epoch}`,
       newEpoch, size: wire.length,
       fields: [
         ['counter',     enc.counter],
@@ -5594,9 +5610,9 @@ async function sendMsg(from, text) {
 
     setStatus(
       newEpoch
-        ? `⚡ New KEM ratchet epoch (${epoch}) `
-          + `— fresh ML-KEM-768 encapsulation, root key re-derived`
-        : `Delivered · epoch ${epoch} · root key: `
+        ? `🔑 New KEM ratchet turn ${epoch} — `
+          + `fresh ML-KEM-768 encapsulation, new shared secret derived`
+        : `Delivered · turn ${epoch} · root key: `
           + `${toHex(S.aliceSess.rootKey).slice(0, 16)}…`,
       'ok'
     );
@@ -5625,16 +5641,28 @@ async function sendMsg(from, text) {
 
 const DEMO_SCRIPT = [
   // [sender, message text, pause before sending (ms)]
-  // Epoch 0: Alice initiates — uses the X3DH base key as initial ratchet key
-  ['alice', 'Hello Bob — epoch 0, Alice sends first, KEM ratchet not yet advanced', 900],
-  ['alice', 'Second message — still epoch 0, chain key steps forward', 900],
-  // Epoch 1: Bob replies — generates fresh ML-KEM-768 keypair, new epoch starts
-  ['bob',   'First reply — epoch 1, new KEM ratchet step, fresh shared secret', 1200],
-  ['bob',   'Second reply — still epoch 1, chain key steps, ratchet holds', 900],
-  // Epoch 2: Alice replies — generates fresh ML-KEM-768 keypair, new epoch
-  ['alice', 'Alice again — epoch 2, another new KEM ratchet step', 1200],
-  // Epoch 3: Bob replies again — fourth KEM ratchet step
-  ['bob',   'Final — epoch 3, root key derived fresh four times total', 1200],
+  //
+  // Turn 1: Alice sends first.
+  //   Alice's session creates a fresh ML-KEM-768 + X25519 keypair, encapsulates
+  //   against Bob's X3DH signed pre-key, and derives a new shared secret.
+  //   Both messages use the same sending chain — chain key steps forward each time.
+  ['alice', 'Turn 1, message 1 — Alice sends first, fresh KEM keypair generated', 900],
+  ['alice', 'Turn 1, message 2 — same sending chain, chain key advances, no new KEM', 900],
+  //
+  // Turn 2: Bob replies.
+  //   Bob's session creates a NEW ML-KEM-768 + X25519 keypair, encapsulates
+  //   against Alice's ratchet key. New shared secret → root key re-derived.
+  //   The ratchetCT in the message lets Alice advance her receiving chain.
+  ['bob',   'Turn 2 — Bob replies, new KEM keypair, new shared secret, root key re-derived', 1200],
+  ['bob',   'Turn 2, message 2 — same sending chain again, chain key advances', 900],
+  //
+  // Turn 3: Alice replies again.
+  //   Another fresh ML-KEM-768 keypair. Root key derived for the third time.
+  ['alice', 'Turn 3 — Alice again, third fresh KEM exchange, root key derived again', 1200],
+  //
+  // Turn 4: Bob replies again.
+  //   Fourth and final fresh KEM exchange in this demo.
+  ['bob',   'Turn 4 — each direction change = new key exchange = new root key', 1200],
 ];
 
 // Update the visual step indicator in the auto-demo progress bar
@@ -5675,8 +5703,8 @@ async function autoDemo() {
   document.getElementById('autoProgress').classList.remove('show');
   document.getElementById('autoBtn').disabled = false;
   setStatus(
-    `Auto demo complete — ${S.epochCount} KEM ratchet epochs, `
-    + `${wireEntryCount} wire events · type your own messages above`,
+    `Auto demo complete — ${S.epochCount} KEM ratchet turns `
+    + `(${S.epochCount} fresh key exchanges), ${wireEntryCount} wire events · type your own messages above`,
     'ok'
   );
 }
