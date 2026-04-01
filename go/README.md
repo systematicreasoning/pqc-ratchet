@@ -104,34 +104,49 @@ See [DESIGN.md](DESIGN.md) for the full analysis.
 ```go
 import pqc "github.com/PeculiarVentures/pqc-ratchet/pqcratchet"
 
-// Bob: generate identity, publish bundle
-bobID, _  := pqc.GenerateIdentity(1, 10, 50)
-aliceID, _ := pqc.GenerateIdentity(2, 10, 50)
+// ── Setup (one-time per user, persist identities to storage) ─────────────────
 
-bundle := &pqc.PreKeyBundle{
-    RegistrationID:     bobID.ID,
-    IdentitySigningPub: bobID.SigningKey.Public,
-    IdentityExchangePub: &bobID.ExchangeKey.Public,
-    SignedPreKeyPub:    &bobID.SignedPreKeys[0].Public,
-    SignedPreKeyIndex:  0,
-    SignedPreKeySig:    bobID.SignedPreKeySigs[0],
-}
+aliceID, _ := pqc.GenerateIdentity(1, 2, 10)  // (id, signedPreKeys, oneTimePreKeys)
+bobID, _   := pqc.GenerateIdentity(2, 2, 10)
 
-// Alice: create session from bundle
+// Bob publishes his bundle to a key server; Alice fetches it
+bundleWire, _ := pqc.MakeBundleWire(bobID, 0, 0)  // signedPreKeyIndex=0, opkIndex=0
+bundle, _      := pqc.ParseBundleWire(bundleWire)
+
+// ── Session establishment (X3DH) ─────────────────────────────────────────────
+
+// Alice initiates — derives shared root key via X3DH
 aliceSess, result, _ := pqc.CreateSessionInitiator(aliceID, bundle)
-defer pqc.ZeroKEMKeyPair(result.EphemeralKP)
 
-// Build and send PreKeyMessage to Bob...
+// Build the PreKeyMessage wire frame to send to Bob
+pkmBytes := pqc.MarshalPreKeyMessageWire(result.ToPreKeyMessageWire(aliceID, bundle))
+// ... transmit pkmBytes to Bob over any channel ...
 
-// Bob: create session from PreKeyMessage
+// Bob receives and establishes his matching session
+raw, _     := pqc.UnmarshalPreKeyMessageWire(bytes.NewReader(pkmBytes))
+pkm, _     := pqc.ParsePreKeyMessageWire(raw)
 bobSess, _ := pqc.CreateSessionResponder(bobID, pkm)
 
-// Alice: encrypt
-enc, _ := aliceSess.EncryptMessage([]byte("hello"))
+// ── Messaging ────────────────────────────────────────────────────────────────
 
-// Bob: decrypt
-plaintext, _ := bobSess.DecryptSignedMessage(signedMsg)
+// Seal() encrypts, marshals, and signs in one call. Returns an opaque wire frame.
+wire, _ := aliceSess.Seal([]byte("hello"))
+
+// Open() unmarshals, verifies, and decrypts in one call.
+plaintext, _ := bobSess.Open(wire)
+fmt.Println(string(plaintext)) // "hello"
+
+// Both sides can now exchange messages freely in either direction.
+// Each direction-change triggers a new KEM ratchet step automatically.
 ```
+
+> **Note:** `result.ToPreKeyMessageWire()` is a convenience method added in the same
+> release as `Seal`/`Open`. See `session.go` and the test helper `buildPKMWire` in
+> `ratchet_test.go` for the full low-level construction if needed.
+
+For advanced use — custom transports, server-side batching, audit tooling — the
+lower-level `EncryptMessage()` / `DecryptSignedMessage()` + `Marshal*` functions
+are also exported.
 
 ## Running tests
 

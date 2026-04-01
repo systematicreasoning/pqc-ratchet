@@ -189,6 +189,7 @@ func (id *Identity) MarshalJSON() ([]byte, error) {
 	return json.Marshal(ji)
 }
 
+// UnmarshalJSON restores an Identity from its JSON representation.
 func (id *Identity) UnmarshalJSON(data []byte) error {
 	var ji jsonIdentity
 	if err := json.Unmarshal(data, &ji); err != nil {

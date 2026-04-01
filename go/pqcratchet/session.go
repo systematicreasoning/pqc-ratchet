@@ -845,3 +845,27 @@ func (s *Session) cacheSkippedKeys(ratchetPub *HybridKEMPublicKey, chain *Symmet
 func skippedKeyID(pub *HybridKEMPublicKey, counter int) string {
 	return hex.EncodeToString(pub[:32]) + ":" + strconv.Itoa(counter)
 }
+
+// ToPreKeyMessageWire builds the PreKeyMessageWire struct from the X3DH result
+// so it can be passed directly to MarshalPreKeyMessageWire.
+// This is a convenience method to avoid field-by-field construction at the call site.
+func (r *KEMInitiatorResult) ToPreKeyMessageWire(alice *Identity, bundle *PreKeyBundle) *PreKeyMessageWire {
+	m := &PreKeyMessageWire{
+		RegistrationID:     uint32(alice.ID),
+		SignedPreKeyIndex:  uint32(bundle.SignedPreKeyIndex),
+		OneTimePreKeyIndex: NoOneTimePreKey,
+	}
+	if bundle.OneTimePreKeyIndex >= 0 && r.CT4 != nil {
+		m.OneTimePreKeyIndex = uint32(bundle.OneTimePreKeyIndex)
+		m.HasCT4 = true
+		copy(m.CT4[:], r.CT4[:])
+	}
+	copy(m.SigningPub[:], DSAPublicKeyBytes(alice.SigningKey.Public))
+	copy(m.ExchangeKeySig[:], alice.ExchangeKeySignature)
+	copy(m.ExchangePub[:], alice.ExchangeKey.Public[:])
+	copy(m.BaseKey[:], r.EphemeralKP.Public[:])
+	copy(m.CT1[:], r.CT1[:])
+	copy(m.CT2[:], r.CT2[:])
+	copy(m.InitiatorSig[:], r.InitiatorSig)
+	return m
+}

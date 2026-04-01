@@ -3,7 +3,7 @@
 > **v0 — no API or wire stability guarantees.**
 
 Post-quantum Double Ratchet + X3DH in TypeScript.  
-Wire-compatible with [github.com/PeculiarVentures/pqc-ratchet](https://github.com/systematicreasoning/pqc-ratchet) (Go).
+Wire-compatible with [github.com/PeculiarVentures/pqc-ratchet](https://github.com/PeculiarVentures/pqc-ratchet) (Go).
 
 Works in **browsers, Node ≥ 18, Deno, and Bun** — uses only WebCrypto and `@noble/post-quantum`.
 
@@ -74,11 +74,18 @@ const { session: aliceSess, preKeyMessage } = await createSessionInitiator(alice
 // Bob receives and creates his session
 const bobSess = await createSessionResponder(bob, preKeyMessage);
 
-// Alice encrypts
-const enc = await aliceSess.encryptMessage(new TextEncoder().encode("hello"));
+// Alice encrypts and gets a wire-ready frame
+const wire = await aliceSess.seal(new TextEncoder().encode("hello"));
 
-// Bob decrypts (wire format handling omitted for brevity — see session.ts)
+// Bob verifies and decrypts
+const plaintext = await bobSess.open(wire);
+console.log(new TextDecoder().decode(plaintext)); // "hello"
 ```
+
+The `seal()` and `open()` methods handle wire marshalling, HMAC construction, and
+signing internally. For advanced use (custom transports, batching, audit tooling)
+the lower-level `encryptMessage()` / `decryptMessage()` + `marshal*` functions are
+also exported.
 
 ## Dependencies
 
@@ -96,7 +103,7 @@ WebCrypto (built-in) handles AES-256-GCM, HMAC-SHA-256, HKDF-SHA-256.
 npm test
 ```
 
-16 tests covering KEM round-trip, DSA sign/verify, symmetric chain, X3DH both sides, full session, multi-turn messaging, and OPK restoration on auth failure.
+17 tests covering KEM round-trip, DSA sign/verify, symmetric chain, X3DH both sides, full session, multi-turn messaging, OPK restoration on auth failure, and seal/open high-level API.
 
 ## Go interop
 

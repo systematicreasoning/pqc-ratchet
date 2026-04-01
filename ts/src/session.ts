@@ -35,6 +35,18 @@ export interface EncryptResult {
   hmacKey: Uint8Array;
 }
 
+/**
+ * An established Double Ratchet session between two parties.
+ *
+ * Obtain an instance via `createSessionInitiator` (Alice's side) or
+ * `createSessionResponder` (Bob's side) after X3DH key agreement.
+ *
+ * **Recommended API:** `seal(plaintext)` / `open(wireBytes)` — these handle
+ * wire marshalling and HMAC internally and are sufficient for most callers.
+ *
+ * **Low-level API:** `encryptMessage()` / `decryptMessage()` + the `marshal*`
+ * functions from `wire.ts` — available for custom transports, batching, or audit.
+ */
 export class Session {
   rootKey: Uint8Array;
   ratchetKP: HybridKEMKeyPair;

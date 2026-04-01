@@ -895,6 +895,37 @@ func TestGCMADBinding(t *testing.T) {
 	}
 }
 
+func TestToPreKeyMessageWire(t *testing.T) {
+	// Verify ToPreKeyMessageWire produces a valid PKM that CreateSessionResponder accepts
+	aliceID, bobID := mustIdentities(t)
+	bundleWire, err := pqc.MakeBundleWire(bobID, 0, 0)
+	must(t, err, "MakeBundleWire")
+	bundle, err := pqc.ParseBundleWire(bundleWire)
+	must(t, err, "ParseBundleWire")
+
+	aliceSess, result, err := pqc.CreateSessionInitiator(aliceID, bundle)
+	must(t, err, "CreateSessionInitiator")
+
+	// Use the convenience method instead of buildPKMWire
+	pkmWire := result.ToPreKeyMessageWire(aliceID, bundle)
+	pkmBytes := pqc.MarshalPreKeyMessageWire(pkmWire)
+	rawPKM, err := pqc.UnmarshalPreKeyMessageWire(bytes.NewReader(pkmBytes))
+	must(t, err, "UnmarshalPreKeyMessageWire")
+	pkm, err := pqc.ParsePreKeyMessageWire(rawPKM)
+	must(t, err, "ParsePreKeyMessageWire")
+
+	bobSess, err := pqc.CreateSessionResponder(bobID, pkm)
+	must(t, err, "CreateSessionResponder")
+
+	wire, err := aliceSess.Seal([]byte("hello via ToPreKeyMessageWire"))
+	must(t, err, "Seal")
+	pt, err := bobSess.Open(wire)
+	must(t, err, "Open")
+	if string(pt) != "hello via ToPreKeyMessageWire" {
+		t.Fatalf("got %q", pt)
+	}
+}
+
 func TestSealOpen(t *testing.T) {
 	// Verify Seal/Open high-level API produces correct results across
 	// multiple ratchet turns.  Uses setupSessions() which is the same
