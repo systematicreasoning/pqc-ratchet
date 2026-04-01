@@ -5969,7 +5969,10 @@ function hlCode(code) {
   let h = escHtml(code);
   h = h.replace(/(\/\/.*)/g,
     '<span class="cmt">$1</span>');
-  h = h.replace(/(&#39;[^&#39;]*&#39;|`[^`]*`)/g,
+  // Match escaped quote strings: &#39;...&#39; (single), &quot;...&quot; (double),
+  // and backtick strings. The original [^&#39;] char class was wrong — it
+  // matched individual chars [&,#,3,9,;] instead of the entity sequence.
+  h = h.replace(/(&#39;(?:[^&]|&(?!#39;))*&#39;|&quot;(?:[^&]|&(?!quot;))*&quot;|`[^`]*`)/g,
     '<span class="str">$1</span>');
   h = h.replace(
     /\b(async|await|const|let|return|new|import|from|of|true|false|null)\b/g,
