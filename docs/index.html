@@ -4418,6 +4418,161 @@ async function deriveKEMRootKey(ss1, ss2, ss3) {
   return hkdf(keyMaterial, salt, INFO_KEM_INIT, 32);
 }
 
+// src/wire.ts
+var WIRE_VERSION = 1;
+var NO_ONE_TIME_PRE_KEY = 4294967295;
+function writeU32(n) {
+  const b = new Uint8Array(4);
+  new DataView(b.buffer).setUint32(0, n, false);
+  return b;
+}
+function readU32(buf, offset) {
+  return new DataView(buf.buffer, buf.byteOffset + offset, 4).getUint32(0, false);
+}
+function marshalMessageProtocol(m) {
+  const parts = [
+    writeU32(m.counter),
+    m.senderRatchetPub
+  ];
+  if (m.ratchetCT !== null) {
+    parts.push(new Uint8Array([1]), m.ratchetCT);
+  } else {
+    parts.push(new Uint8Array([0]));
+  }
+  parts.push(writeU32(m.ciphertext.length), m.ciphertext);
+  return concat(...parts);
+}
+function unmarshalMessageProtocol(b) {
+  let off = 0;
+  if (b.length < 4) throw new Error("wire: message too short (counter)");
+  const counter = readU32(b, off);
+  off += 4;
+  if (b.length < off + HYBRID_PUBLIC_KEY_SIZE) throw new Error("wire: message too short (ratchetPub)");
+  const senderRatchetPub = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
+  off += HYBRID_PUBLIC_KEY_SIZE;
+  if (b.length < off + 1) throw new Error("wire: message too short (hasRatchetCT)");
+  const hasRatchetCT = b[off];
+  off += 1;
+  let ratchetCT = null;
+  if (hasRatchetCT === 1) {
+    if (b.length < off + HYBRID_CIPHERTEXT_SIZE) throw new Error("wire: message too short (ratchetCT)");
+    ratchetCT = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
+    off += HYBRID_CIPHERTEXT_SIZE;
+  }
+  if (b.length < off + 4) throw new Error("wire: message too short (ciphertextLen)");
+  const ctLen = readU32(b, off);
+  off += 4;
+  if (b.length < off + ctLen) throw new Error("wire: message truncated (ciphertext)");
+  const ciphertext = b.slice(off, off + ctLen);
+  off += ctLen;
+  if (off !== b.length) throw new Error(`wire: ${b.length - off} unexpected trailing bytes`);
+  return { counter, senderRatchetPub, ratchetCT, ciphertext };
+}
+function buildHMACInput(ad, initiatorSigKey, responderSigKey, inner) {
+  return concat(ad, initiatorSigKey, responderSigKey, inner);
+}
+function marshalSignedMessage(inner, hmacSig) {
+  return concat(
+    new Uint8Array([WIRE_VERSION]),
+    hmacSig,
+    writeU32(inner.length),
+    inner
+  );
+}
+function unmarshalSignedMessage(b) {
+  if (b.length < 1 + 32 + 4) throw new Error("wire: signed message too short");
+  if (b[0] !== WIRE_VERSION) throw new Error(`wire: unsupported version 0x${b[0].toString(16)}`);
+  const hmacSig = b.slice(1, 33);
+  const innerLen = readU32(b, 33);
+  const innerStart = 37;
+  if (b.length < innerStart + innerLen) throw new Error("wire: signed message truncated");
+  if (b.length !== innerStart + innerLen) {
+    throw new Error(`wire: ${b.length - innerStart - innerLen} unexpected trailing bytes`);
+  }
+  const messageRaw = b.slice(innerStart, innerStart + innerLen);
+  const message = unmarshalMessageProtocol(messageRaw);
+  return { hmacSig, messageRaw, message };
+}
+function marshalPreKeyMessageWire(m) {
+  const parts = [
+    new Uint8Array([WIRE_VERSION]),
+    writeU32(m.registrationID),
+    writeU32(m.signedPreKeyIndex),
+    writeU32(m.oneTimePreKeyIndex),
+    m.signingPub,
+    m.exchangeKeySig,
+    m.exchangePub,
+    m.baseKey,
+    m.ct1,
+    m.ct2
+  ];
+  if (m.ct4 !== null) {
+    parts.push(new Uint8Array([1]), m.ct4);
+  } else {
+    parts.push(new Uint8Array([0]));
+  }
+  parts.push(
+    m.initiatorSig,
+    writeU32(m.signedMessageBytes.length),
+    m.signedMessageBytes
+  );
+  return concat(...parts);
+}
+function unmarshalPreKeyMessageWire(b) {
+  let off = 0;
+  if (b.length < 1) throw new Error("wire: preKeyMsg too short");
+  if (b[off] !== WIRE_VERSION) throw new Error(`wire: unsupported version 0x${b[off].toString(16)}`);
+  off += 1;
+  const registrationID = readU32(b, off);
+  off += 4;
+  const signedPreKeyIndex = readU32(b, off);
+  off += 4;
+  const oneTimePreKeyIndex = readU32(b, off);
+  off += 4;
+  const signingPub = b.slice(off, off + DSA_PUBLIC_KEY_SIZE);
+  off += DSA_PUBLIC_KEY_SIZE;
+  const exchangeKeySig = b.slice(off, off + DSA_SIGNATURE_SIZE);
+  off += DSA_SIGNATURE_SIZE;
+  const exchangePub = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
+  off += HYBRID_PUBLIC_KEY_SIZE;
+  const baseKey = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
+  off += HYBRID_PUBLIC_KEY_SIZE;
+  const ct1 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
+  off += HYBRID_CIPHERTEXT_SIZE;
+  const ct2 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
+  off += HYBRID_CIPHERTEXT_SIZE;
+  if (b.length < off + 1) throw new Error("wire: preKeyMsg too short (hasCT4)");
+  const hasCT4 = b[off];
+  off += 1;
+  let ct4 = null;
+  if (hasCT4 === 1) {
+    ct4 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
+    off += HYBRID_CIPHERTEXT_SIZE;
+  }
+  const initiatorSig = b.slice(off, off + DSA_SIGNATURE_SIZE);
+  off += DSA_SIGNATURE_SIZE;
+  if (b.length < off + 4) throw new Error("wire: preKeyMsg too short (msgLen)");
+  const msgLen = readU32(b, off);
+  off += 4;
+  const signedMessageBytes = msgLen > 0 ? b.slice(off, off + msgLen) : new Uint8Array(0);
+  off += msgLen;
+  if (off !== b.length) throw new Error(`wire: ${b.length - off} unexpected trailing bytes`);
+  return {
+    registrationID,
+    signedPreKeyIndex,
+    oneTimePreKeyIndex,
+    signingPub,
+    exchangeKeySig,
+    exchangePub,
+    baseKey,
+    ct1,
+    ct2,
+    ct4,
+    initiatorSig,
+    signedMessageBytes
+  };
+}
+
 // src/session.ts
 var ERR_INVALID_SIGNATURE = "pqcratchet: invalid signature";
 var ERR_DECRYPTION_FAILED = "pqcratchet: decryption failed";
@@ -4464,6 +4619,55 @@ var Session = class {
       ciphertext,
       hmacKey: keys.hmacKey
     };
+  }
+  // ─── High-level API ────────────────────────────────────────────────────────
+  //
+  // seal() and open() are the recommended API for most callers.
+  // They handle wire marshalling, HMAC construction, and signing internally
+  // so the caller only deals with plaintext bytes and opaque wire frames.
+  //
+  // The low-level encryptMessage / decryptMessage + marshal* functions remain
+  // available for advanced use: custom transports, server-side batching, audit.
+  /**
+   * Encrypt plaintext and return a self-contained, authenticated wire frame.
+   *
+   * The returned bytes include the message counter, sender ratchet public key,
+   * optional KEM ciphertext (on the first send of a new ratchet turn), the
+   * AES-256-GCM ciphertext, and an outer HMAC-SHA-256 authentication tag.
+   * Pass them directly to the recipient's open().
+   */
+  async seal(plaintext) {
+    const enc = await this.encryptMessage(plaintext);
+    const inner = marshalMessageProtocol({
+      counter: enc.counter,
+      senderRatchetPub: enc.newRatchetPub,
+      ratchetCT: enc.ratchetCT,
+      ciphertext: enc.ciphertext
+    });
+    const hmacInput = buildHMACInput(
+      this.ad,
+      this.initiatorSigningKeyBytes,
+      this.responderSigningKeyBytes,
+      inner
+    );
+    const sig = await hmacSHA256(enc.hmacKey, hmacInput);
+    return marshalSignedMessage(inner, sig);
+  }
+  /**
+   * Verify and decrypt a wire frame produced by the remote side's seal().
+   * Throws if the HMAC is invalid, the ratchet state is inconsistent, or
+   * the message is a duplicate.
+   */
+  async open(wireBytes) {
+    const sm = unmarshalSignedMessage(wireBytes);
+    return this.decryptMessage(
+      sm.message.counter,
+      sm.message.senderRatchetPub,
+      sm.message.ratchetCT,
+      sm.message.ciphertext,
+      sm.hmacSig,
+      sm.messageRaw
+    );
   }
   // ─── Decrypt ───────────────────────────────────────────────────────────────
   async decryptMessage(counter, senderRatchetPub, ratchetCT, ciphertext, hmacSignature, messageRaw) {
@@ -4724,161 +4928,6 @@ async function createSessionResponder(responderIdentity, msg) {
     receivingChain: null
   };
   return session;
-}
-
-// src/wire.ts
-var WIRE_VERSION = 1;
-var NO_ONE_TIME_PRE_KEY = 4294967295;
-function writeU32(n) {
-  const b = new Uint8Array(4);
-  new DataView(b.buffer).setUint32(0, n, false);
-  return b;
-}
-function readU32(buf, offset) {
-  return new DataView(buf.buffer, buf.byteOffset + offset, 4).getUint32(0, false);
-}
-function marshalMessageProtocol(m) {
-  const parts = [
-    writeU32(m.counter),
-    m.senderRatchetPub
-  ];
-  if (m.ratchetCT !== null) {
-    parts.push(new Uint8Array([1]), m.ratchetCT);
-  } else {
-    parts.push(new Uint8Array([0]));
-  }
-  parts.push(writeU32(m.ciphertext.length), m.ciphertext);
-  return concat(...parts);
-}
-function unmarshalMessageProtocol(b) {
-  let off = 0;
-  if (b.length < 4) throw new Error("wire: message too short (counter)");
-  const counter = readU32(b, off);
-  off += 4;
-  if (b.length < off + HYBRID_PUBLIC_KEY_SIZE) throw new Error("wire: message too short (ratchetPub)");
-  const senderRatchetPub = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
-  off += HYBRID_PUBLIC_KEY_SIZE;
-  if (b.length < off + 1) throw new Error("wire: message too short (hasRatchetCT)");
-  const hasRatchetCT = b[off];
-  off += 1;
-  let ratchetCT = null;
-  if (hasRatchetCT === 1) {
-    if (b.length < off + HYBRID_CIPHERTEXT_SIZE) throw new Error("wire: message too short (ratchetCT)");
-    ratchetCT = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
-    off += HYBRID_CIPHERTEXT_SIZE;
-  }
-  if (b.length < off + 4) throw new Error("wire: message too short (ciphertextLen)");
-  const ctLen = readU32(b, off);
-  off += 4;
-  if (b.length < off + ctLen) throw new Error("wire: message truncated (ciphertext)");
-  const ciphertext = b.slice(off, off + ctLen);
-  off += ctLen;
-  if (off !== b.length) throw new Error(`wire: ${b.length - off} unexpected trailing bytes`);
-  return { counter, senderRatchetPub, ratchetCT, ciphertext };
-}
-function buildHMACInput(ad, initiatorSigKey, responderSigKey, inner) {
-  return concat(ad, initiatorSigKey, responderSigKey, inner);
-}
-function marshalSignedMessage(inner, hmacSig) {
-  return concat(
-    new Uint8Array([WIRE_VERSION]),
-    hmacSig,
-    writeU32(inner.length),
-    inner
-  );
-}
-function unmarshalSignedMessage(b) {
-  if (b.length < 1 + 32 + 4) throw new Error("wire: signed message too short");
-  if (b[0] !== WIRE_VERSION) throw new Error(`wire: unsupported version 0x${b[0].toString(16)}`);
-  const hmacSig = b.slice(1, 33);
-  const innerLen = readU32(b, 33);
-  const innerStart = 37;
-  if (b.length < innerStart + innerLen) throw new Error("wire: signed message truncated");
-  if (b.length !== innerStart + innerLen) {
-    throw new Error(`wire: ${b.length - innerStart - innerLen} unexpected trailing bytes`);
-  }
-  const messageRaw = b.slice(innerStart, innerStart + innerLen);
-  const message = unmarshalMessageProtocol(messageRaw);
-  return { hmacSig, messageRaw, message };
-}
-function marshalPreKeyMessageWire(m) {
-  const parts = [
-    new Uint8Array([WIRE_VERSION]),
-    writeU32(m.registrationID),
-    writeU32(m.signedPreKeyIndex),
-    writeU32(m.oneTimePreKeyIndex),
-    m.signingPub,
-    m.exchangeKeySig,
-    m.exchangePub,
-    m.baseKey,
-    m.ct1,
-    m.ct2
-  ];
-  if (m.ct4 !== null) {
-    parts.push(new Uint8Array([1]), m.ct4);
-  } else {
-    parts.push(new Uint8Array([0]));
-  }
-  parts.push(
-    m.initiatorSig,
-    writeU32(m.signedMessageBytes.length),
-    m.signedMessageBytes
-  );
-  return concat(...parts);
-}
-function unmarshalPreKeyMessageWire(b) {
-  let off = 0;
-  if (b.length < 1) throw new Error("wire: preKeyMsg too short");
-  if (b[off] !== WIRE_VERSION) throw new Error(`wire: unsupported version 0x${b[off].toString(16)}`);
-  off += 1;
-  const registrationID = readU32(b, off);
-  off += 4;
-  const signedPreKeyIndex = readU32(b, off);
-  off += 4;
-  const oneTimePreKeyIndex = readU32(b, off);
-  off += 4;
-  const signingPub = b.slice(off, off + DSA_PUBLIC_KEY_SIZE);
-  off += DSA_PUBLIC_KEY_SIZE;
-  const exchangeKeySig = b.slice(off, off + DSA_SIGNATURE_SIZE);
-  off += DSA_SIGNATURE_SIZE;
-  const exchangePub = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
-  off += HYBRID_PUBLIC_KEY_SIZE;
-  const baseKey = b.slice(off, off + HYBRID_PUBLIC_KEY_SIZE);
-  off += HYBRID_PUBLIC_KEY_SIZE;
-  const ct1 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
-  off += HYBRID_CIPHERTEXT_SIZE;
-  const ct2 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
-  off += HYBRID_CIPHERTEXT_SIZE;
-  if (b.length < off + 1) throw new Error("wire: preKeyMsg too short (hasCT4)");
-  const hasCT4 = b[off];
-  off += 1;
-  let ct4 = null;
-  if (hasCT4 === 1) {
-    ct4 = b.slice(off, off + HYBRID_CIPHERTEXT_SIZE);
-    off += HYBRID_CIPHERTEXT_SIZE;
-  }
-  const initiatorSig = b.slice(off, off + DSA_SIGNATURE_SIZE);
-  off += DSA_SIGNATURE_SIZE;
-  if (b.length < off + 4) throw new Error("wire: preKeyMsg too short (msgLen)");
-  const msgLen = readU32(b, off);
-  off += 4;
-  const signedMessageBytes = msgLen > 0 ? b.slice(off, off + msgLen) : new Uint8Array(0);
-  off += msgLen;
-  if (off !== b.length) throw new Error(`wire: ${b.length - off} unexpected trailing bytes`);
-  return {
-    registrationID,
-    signedPreKeyIndex,
-    oneTimePreKeyIndex,
-    signingPub,
-    exchangeKeySig,
-    exchangePub,
-    baseKey,
-    ct1,
-    ct2,
-    ct4,
-    initiatorSig,
-    signedMessageBytes
-  };
 }
 export {
   AES_GCM_NONCE_SIZE,
@@ -5503,54 +5552,24 @@ async function sendMsg(from, text) {
     setStatus(
       `${from.charAt(0).toUpperCase() + from.slice(1)} encrypting…`, 'busy');
 
-    // Step 1 — encrypt (ratchet advances on sender side)
-    const enc = await sess.encryptMessage(
-      new TextEncoder().encode(plaintext)
-    );
+    // seal() is the high-level API: encrypt → marshal → HMAC-sign → wire frame.
+    // This is all a real caller needs. The wire format is identical to the
+    // manual 5-step process below — seal/open are thin wrappers.
+    const wire = await sess.seal(new TextEncoder().encode(plaintext));
 
-    // Step 2 — serialise inner message
-    const inner = marshalMessageProtocol({
-      counter:         enc.counter,
-      senderRatchetPub: enc.newRatchetPub,
-      ratchetCT:       enc.ratchetCT,   // non-null = new epoch
-      ciphertext:      enc.ciphertext,
-    });
-
-    // Step 3 — compute outer HMAC
-    // Input: AD ‖ initiatorSigningKey ‖ responderSigningKey ‖ inner
-    const hmacInput = buildHMACInput(
-      sess.ad,
-      sess.initiatorSigningKeyBytes,
-      sess.responderSigningKeyBytes,
-      inner
-    );
-    const hmacSig = await hmacSHA256(enc.hmacKey, hmacInput);
-
-    // Step 4 — wrap in signed envelope
-    const wire = marshalSignedMessage(inner, hmacSig);
-
-    // Detect a new ratchet epoch.
-    //
-    // The KEM ratchet advances when a sender starts a NEW sending chain:
-    //   enc.ratchetCT !== null  = a new KEM ciphertext was generated
-    //   enc.counter === 0       = first message of this sending chain
-    //
-    // A new ratchet turn happens when the sender direction changes
-    // (Alice→Bob or Bob→Alice).  At that point the new sender's session
-    // has already processed the previous sender's ratchet pub via
-    // decryptMessage, which reset sendingChain=null and generated a fresh
-    // KEM keypair — so every direction switch IS a new turn by definition.
-    //
-    // We use this observable demo-side signal rather than inspecting
-    // enc.counter because epochRatchetCT persists across all messages in
-    // an epoch, making enc.ratchetCT !== null always true and unreliable.
+    // Direction-change detection for the demo turn counter.
+    // Every Alice→Bob / Bob→Alice switch is a new KEM ratchet turn.
     const newEpoch = from !== S.lastSender && S.lastSender !== null;
     if (newEpoch) S.epochCount++;
     const epoch = S.epochCount;
     S.lastSender = from;
     const nowTs = ts();
 
-    // Add to wire log
+    // Parse the sealed frame to extract fields for the wire log.
+    // Only needed for the demo display — real code skips this.
+    const sm  = unmarshalSignedMessage(wire);
+    const enc = sm.message;
+
     addWireEntry({
       ts: nowTs, from,
       type: `Message (counter=${enc.counter})`,
@@ -5561,20 +5580,20 @@ async function sendMsg(from, text) {
       newEpoch, size: wire.length,
       fields: [
         ['counter',     enc.counter],
-        ['ratchet-pub', short(enc.newRatchetPub, 4)],
+        ['ratchet-pub', short(enc.senderRatchetPub, 4)],
         ['ratchet-ct',  enc.ratchetCT ? short(enc.ratchetCT, 4) : 'none'],
-        ['hmac',        short(hmacSig, 4)],
+        ['hmac',        short(sm.hmacSig, 4)],
         ['ct-len',      enc.ciphertext.length + 'B'],
       ],
       hexFields: [
         ['HMAC-SHA-256 signature (outer)',
-          toHex(hmacSig),
+          toHex(sm.hmacSig),
           from === 'alice' ? 'hv-alice' : 'hv-bob'],
         ['Sender ratchet pub (ML-KEM-768 + X25519)',
-          toHex(enc.newRatchetPub).slice(0, 80) + '…',
+          toHex(enc.senderRatchetPub).slice(0, 80) + '…',
           from === 'alice' ? 'hv-alice' : 'hv-bob'],
         ...(enc.ratchetCT ? [
-          ['Ratchet CT — KEM encapsulation for new epoch',
+          ['Ratchet CT — KEM encapsulation for new turn',
             toHex(enc.ratchetCT).slice(0, 80) + '…', 'hv-warn']
         ] : []),
         ['Ciphertext (AES-256-GCM + tag)',
@@ -5582,20 +5601,10 @@ async function sendMsg(from, text) {
       ],
     });
 
-    // Highlight the encrypt lines in the code panel
     highlightCodeLines('encrypt_' + from);
 
-    // Steps 5 & 6 — deliver and decrypt on the other side
-    const sm = unmarshalSignedMessage(wire);
-    const pt = await remote.decryptMessage(
-      sm.message.counter,
-      sm.message.senderRatchetPub,
-      sm.message.ratchetCT,
-      sm.message.ciphertext,
-      sm.hmacSig,
-      sm.messageRaw,   // HMAC is verified over this raw bytes
-    );
-    const decoded = new TextDecoder().decode(pt);
+    // open() is the high-level API: unmarshal → HMAC verify → decrypt.
+    const decoded = new TextDecoder().decode(await remote.open(wire));
 
     // Highlight the decrypt lines in the code panel
     highlightCodeLines('decrypt_' + to);
@@ -5604,9 +5613,9 @@ async function sendMsg(from, text) {
     addBubble(to, decoded, {
       counter:    enc.counter,
       epoch,      newEpoch,   ts: nowTs,
-      ratchetPub: short(enc.newRatchetPub, 5),
+      ratchetPub: short(enc.senderRatchetPub, 5),
       ratchetCT:  enc.ratchetCT ? short(enc.ratchetCT, 5) : null,
-      hmac:       short(hmacSig, 5),
+      hmac:       short(sm.hmacSig, 5),
       ct:         short(enc.ciphertext, 5),
     });
 
@@ -5844,40 +5853,20 @@ const SRC = {
     { id: 'a-pin', code: `// → "8A3FC291"  (Bob sees the same value — MITM changes it)` },
 
     { div: 'Encrypt a message' },
-    { id: 'a-enc', code: `// encryptMessage() advances the sending chain key` },
-    { id: 'a-enc', code: `// On the first send of a new epoch, it also:` },
-    { id: 'a-enc', code: `//   - generates a fresh ML-KEM-768 + X25519 keypair` },
-    { id: 'a-enc', code: `//   - encapsulates against Bob's ratchet key` },
-    { id: 'a-enc', code: `//   - includes the KEM ciphertext in the message (ratchetCT)` },
-    { id: 'a-enc', code: `const enc = await session.encryptMessage(` },
+    { id: 'a-enc', code: `// seal() handles everything: encrypt → marshal → HMAC-sign` },
+    { id: 'a-enc', code: `// Returns an opaque wire frame ready to send.` },
+    { id: 'a-enc', code: `// On the first send of a new ratchet turn it also generates` },
+    { id: 'a-enc', code: `// a fresh ML-KEM-768 + X25519 keypair and includes the KEM CT.` },
+    { id: 'a-enc', code: `const wire = await session.seal(` },
     { id: 'a-enc', code: `  new TextEncoder().encode('Hello Bob')` },
     { id: 'a-enc', code: `);` },
-    { id: 'a-enc', code: `` },
-    { id: 'a-enc', code: `const inner  = marshalMessageProtocol(enc);` },
-    { id: 'a-enc', code: `const hmacIn = buildHMACInput(` },
-    { id: 'a-enc', code: `  session.ad,                       // Alice‖Bob exchange keys` },
-    { id: 'a-enc', code: `  session.initiatorSigningKeyBytes, // Alice DSA pub` },
-    { id: 'a-enc', code: `  session.responderSigningKeyBytes, // Bob DSA pub` },
-    { id: 'a-enc', code: `  inner                             // serialised message` },
-    { id: 'a-enc', code: `);` },
-    { id: 'a-enc', code: `const sig = await hmacSHA256(enc.hmacKey, hmacIn);` },
-    { id: 'a-enc', code: `await sendToBob(marshalSignedMessage(inner, sig));` },
+    { id: 'a-enc', code: `await sendToBob(wire);` },
 
     { div: "Decrypt Bob's reply" },
-    { id: 'a-dec', code: `const sm = unmarshalSignedMessage(await receiveFromBob());` },
-    { id: 'a-dec', code: `` },
-    { id: 'a-dec', code: `// decryptMessage():` },
-    { id: 'a-dec', code: `//  1. derives message key from receiving chain` },
-    { id: 'a-dec', code: `//  2. if ratchetCT != null: new epoch, advance ratchet` },
-    { id: 'a-dec', code: `//  3. verifies outer HMAC-SHA-256 (rolls back on fail)` },
-    { id: 'a-dec', code: `//  4. decrypts with AES-256-GCM` },
-    { id: 'a-dec', code: `const plain = await session.decryptMessage(` },
-    { id: 'a-dec', code: `  sm.message.counter,` },
-    { id: 'a-dec', code: `  sm.message.senderRatchetPub,` },
-    { id: 'a-dec', code: `  sm.message.ratchetCT,   // null if same epoch` },
-    { id: 'a-dec', code: `  sm.message.ciphertext,` },
-    { id: 'a-dec', code: `  sm.hmacSig, sm.messageRaw` },
-    { id: 'a-dec', code: `);` },
+    { id: 'a-dec', code: `// open() handles everything: unmarshal → HMAC verify → decrypt.` },
+    { id: 'a-dec', code: `// Throws if authentication fails or message is a duplicate.` },
+    { id: 'a-dec', code: `// Automatically advances the ratchet if this is a new turn.` },
+    { id: 'a-dec', code: `const plain = await session.open(await receiveFromBob());` },
   ],
 
   bob: [
@@ -5920,33 +5909,19 @@ const SRC = {
     { id: 'b-pin', code: `// → "8A3FC291"  — confirm this matches Alice before approving` },
 
     { div: "Decrypt Alice's message" },
-    { id: 'b-dec', code: `const sm = unmarshalSignedMessage(await receiveFromAlice());` },
-    { id: 'b-dec', code: `` },
-    { id: 'b-dec', code: `const plain = await session.decryptMessage(` },
-    { id: 'b-dec', code: `  sm.message.counter,` },
-    { id: 'b-dec', code: `  sm.message.senderRatchetPub,` },
-    { id: 'b-dec', code: `  sm.message.ratchetCT,   // null if same epoch` },
-    { id: 'b-dec', code: `  sm.message.ciphertext,` },
-    { id: 'b-dec', code: `  sm.hmacSig, sm.messageRaw` },
-    { id: 'b-dec', code: `);` },
+    { id: 'b-dec', code: `// open() verifies HMAC, advances ratchet if needed, decrypts.` },
+    { id: 'b-dec', code: `const plain = await session.open(await receiveFromAlice());` },
 
-    { div: 'Encrypt a reply (first reply triggers new KEM epoch)' },
-    { id: 'b-enc', code: `// Bob's first reply: enc.ratchetCT is non-null.` },
-    { id: 'b-enc', code: `// Bob generated a fresh ML-KEM-768 + X25519 keypair,` },
-    { id: 'b-enc', code: `// encapsulated against Alice's ratchet key,` },
-    { id: 'b-enc', code: `// and included the ciphertext so Alice can advance.` },
-    { id: 'b-enc', code: `const enc = await session.encryptMessage(` },
+    { div: 'Encrypt a reply (first reply triggers new KEM turn)' },
+    { id: 'b-enc', code: `// Bob's first reply triggers a new KEM ratchet turn:` },
+    { id: 'b-enc', code: `// seal() generates a fresh ML-KEM-768 + X25519 keypair,` },
+    { id: 'b-enc', code: `// encapsulates against Alice's ratchet key, and includes` },
+    { id: 'b-enc', code: `// the KEM ciphertext so Alice can advance her ratchet.` },
+    { id: 'b-enc', code: `// Subsequent messages in this turn use the same chain key.` },
+    { id: 'b-enc', code: `const wire = await session.seal(` },
     { id: 'b-enc', code: `  new TextEncoder().encode('Hi Alice!')` },
     { id: 'b-enc', code: `);` },
-    { id: 'b-enc', code: `` },
-    { id: 'b-enc', code: `const inner = marshalMessageProtocol(enc);` },
-    { id: 'b-enc', code: `const hmacIn = buildHMACInput(` },
-    { id: 'b-enc', code: `  session.ad,` },
-    { id: 'b-enc', code: `  session.initiatorSigningKeyBytes,` },
-    { id: 'b-enc', code: `  session.responderSigningKeyBytes, inner` },
-    { id: 'b-enc', code: `);` },
-    { id: 'b-enc', code: `const sig = await hmacSHA256(enc.hmacKey, hmacIn);` },
-    { id: 'b-enc', code: `await sendToAlice(marshalSignedMessage(inner, sig));` },
+    { id: 'b-enc', code: `await sendToAlice(wire);` },
   ],
 };
 

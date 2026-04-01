@@ -894,3 +894,49 @@ func TestGCMADBinding(t *testing.T) {
 		t.Fatalf("wrong plaintext: %q", got)
 	}
 }
+
+func TestSealOpen(t *testing.T) {
+	// Verify Seal/Open high-level API produces correct results across
+	// multiple ratchet turns.  Uses setupSessions() which is the same
+	// helper used by all other session tests.
+	aliceSess, bobSess := setupSessions(t)
+
+	check := func(sess *pqc.Session, wire []byte, want, label string) {
+		t.Helper()
+		pt, err := sess.Open(wire)
+		must(t, err, label+" Open")
+		if string(pt) != want {
+			t.Fatalf("%s: got %q want %q", label, pt, want)
+		}
+	}
+
+	// Turn 0: Alice → Bob (2 messages, same ratchet turn)
+	for _, msg := range []string{"hello from alice", "second message"} {
+		wire, err := aliceSess.Seal([]byte(msg))
+		must(t, err, "Seal alice")
+		check(bobSess, wire, msg, "alice→bob")
+	}
+
+	// Turn 1: Bob → Alice (new ratchet turn — fresh ML-KEM-768 keypair)
+	for _, msg := range []string{"hi alice", "second from bob"} {
+		wire, err := bobSess.Seal([]byte(msg))
+		must(t, err, "Seal bob")
+		check(aliceSess, wire, msg, "bob→alice")
+	}
+
+	// Turn 2: Alice → Bob
+	wire, err := aliceSess.Seal([]byte("alice again"))
+	must(t, err, "Seal alice turn2")
+	check(bobSess, wire, "alice again", "alice→bob turn2")
+
+	// Turn 3: Bob → Alice
+	wire, err = bobSess.Seal([]byte("bob final"))
+	must(t, err, "Seal bob turn3")
+	check(aliceSess, wire, "bob final", "bob→alice turn3")
+
+	// Root keys must converge after all exchanges
+	if !bytes.Equal(aliceSess.RootKey, bobSess.RootKey) {
+		t.Fatalf("root keys diverged: alice=%x bob=%x",
+			aliceSess.RootKey[:8], bobSess.RootKey[:8])
+	}
+}

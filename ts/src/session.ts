@@ -14,6 +14,7 @@ import {
 import { hkdfExtract, hkdfExpand, hmacSHA256, aesGcmEncrypt, aesGcmDecrypt, concat, writeUint32BE, constantTimeEqual, zero } from "./crypto.js";
 import { SymmetricChain, KEMRatchetStep, MessageKeys, deriveMessageKeys } from "./chain.js";
 import { generateKEMKeyPair, encapsulate, decapsulate, zeroKEMKeyPair, HybridKEMKeyPair } from "./kem.js";
+import { marshalMessageProtocol, buildHMACInput, marshalSignedMessage, unmarshalSignedMessage } from "./wire.js";
 
 // ─── Errors ──────────────────────────────────────────────────────────────────
 
@@ -88,6 +89,58 @@ export class Session {
       ciphertext,
       hmacKey: keys.hmacKey,
     };
+  }
+
+  // ─── High-level API ────────────────────────────────────────────────────────
+  //
+  // seal() and open() are the recommended API for most callers.
+  // They handle wire marshalling, HMAC construction, and signing internally
+  // so the caller only deals with plaintext bytes and opaque wire frames.
+  //
+  // The low-level encryptMessage / decryptMessage + marshal* functions remain
+  // available for advanced use: custom transports, server-side batching, audit.
+
+  /**
+   * Encrypt plaintext and return a self-contained, authenticated wire frame.
+   *
+   * The returned bytes include the message counter, sender ratchet public key,
+   * optional KEM ciphertext (on the first send of a new ratchet turn), the
+   * AES-256-GCM ciphertext, and an outer HMAC-SHA-256 authentication tag.
+   * Pass them directly to the recipient's open().
+   */
+  async seal(plaintext: Uint8Array): Promise<Uint8Array> {
+    const enc   = await this.encryptMessage(plaintext);
+    const inner = marshalMessageProtocol({
+      counter:          enc.counter,
+      senderRatchetPub: enc.newRatchetPub,
+      ratchetCT:        enc.ratchetCT,
+      ciphertext:       enc.ciphertext,
+    });
+    const hmacInput = buildHMACInput(
+      this.ad,
+      this.initiatorSigningKeyBytes,
+      this.responderSigningKeyBytes,
+      inner,
+    );
+    const sig = await hmacSHA256(enc.hmacKey, hmacInput);
+    return marshalSignedMessage(inner, sig);
+  }
+
+  /**
+   * Verify and decrypt a wire frame produced by the remote side's seal().
+   * Throws if the HMAC is invalid, the ratchet state is inconsistent, or
+   * the message is a duplicate.
+   */
+  async open(wireBytes: Uint8Array): Promise<Uint8Array> {
+    const sm = unmarshalSignedMessage(wireBytes);
+    return this.decryptMessage(
+      sm.message.counter,
+      sm.message.senderRatchetPub,
+      sm.message.ratchetCT,
+      sm.message.ciphertext,
+      sm.hmacSig,
+      sm.messageRaw,
+    );
   }
 
   // ─── Decrypt ───────────────────────────────────────────────────────────────

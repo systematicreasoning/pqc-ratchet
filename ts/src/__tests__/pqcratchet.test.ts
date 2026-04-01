@@ -20,7 +20,7 @@ import {
   generateDSAKeyPair, dsaSign, dsaVerify,
   SymmetricChain, deriveMessageKeys,
   authenticateA, authenticateB,
-  generateIdentity, createSessionInitiator, createSessionResponder,
+  generateIdentity, createSessionInitiator, createSessionResponder, PreKeyBundle,
   concat, constantTimeEqual, randomBytes,
   HYBRID_PUBLIC_KEY_SIZE, HYBRID_CIPHERTEXT_SIZE,
   DSA_SIGNATURE_SIZE,
@@ -311,4 +311,36 @@ test("OPK slot restored on auth failure", async () => {
 
   // OPK slot must be restored
   expect(bob.preKeys[0]).not.toBeNull();
+});
+
+test("seal/open high-level API — bidirectional multi-turn", async () => {
+  // Uses fullHandshake() helper which sets up two sessions from generateIdentity
+  const { aliceSess, bobSess } = await fullHandshake();
+
+  const enc = new TextEncoder();
+  const dec = new TextDecoder();
+
+  // Turn 0: Alice → Bob (2 messages, same ratchet turn)
+  const w1 = await aliceSess.seal(enc.encode("hello from alice"));
+  const w2 = await aliceSess.seal(enc.encode("second message"));
+  expect(dec.decode(await bobSess.open(w1))).toBe("hello from alice");
+  expect(dec.decode(await bobSess.open(w2))).toBe("second message");
+
+  // Turn 1: Bob → Alice (new ratchet turn — fresh ML-KEM-768 keypair)
+  const w3 = await bobSess.seal(enc.encode("hi alice"));
+  const w4 = await bobSess.seal(enc.encode("second from bob"));
+  expect(dec.decode(await aliceSess.open(w3))).toBe("hi alice");
+  expect(dec.decode(await aliceSess.open(w4))).toBe("second from bob");
+
+  // Turn 2: Alice → Bob (another new ratchet turn)
+  const w5 = await aliceSess.seal(enc.encode("alice again"));
+  expect(dec.decode(await bobSess.open(w5))).toBe("alice again");
+
+  // Turn 3: Bob → Alice
+  const w6 = await bobSess.seal(enc.encode("bob final"));
+  expect(dec.decode(await aliceSess.open(w6))).toBe("bob final");
+
+  // Both sides must converge on the same root key
+  expect(Buffer.from(aliceSess.rootKey).toString("hex"))
+    .toBe(Buffer.from(bobSess.rootKey).toString("hex"));
 });

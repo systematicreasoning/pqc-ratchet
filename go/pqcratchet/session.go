@@ -436,6 +436,47 @@ type EncryptResult struct {
 	NewRatchetPub *HybridKEMPublicKey
 }
 
+// ─── High-level API ───────────────────────────────────────────────────────────
+//
+// Seal and Open are the recommended API for most callers.
+// They handle wire marshalling, HMAC construction, and signing internally so
+// the caller only deals with plaintext bytes and opaque wire frames.
+//
+// The lower-level EncryptMessage / DecryptSignedMessage + Marshal* functions
+// remain available for advanced use: custom transports, server-side batching,
+// audit tooling.
+
+// Seal encrypts plaintext and returns a self-contained, authenticated wire
+// frame ready to transmit.  Pass the returned bytes to the recipient's Open.
+//
+// The frame includes: message counter, sender ratchet public key, optional KEM
+// ciphertext (on the first message of a new ratchet turn), the AES-256-GCM
+// ciphertext, and an outer HMAC-SHA-256 authentication tag.
+func (s *Session) Seal(plaintext []byte) ([]byte, error) {
+	enc, err := s.EncryptMessage(plaintext)
+	if err != nil {
+		return nil, err
+	}
+	inner := MarshalMessageProtocol(&ParsedMessageProtocol{
+		Counter:         uint32(enc.Counter),
+		SenderRatchetPub: enc.NewRatchetPub,
+		RatchetCT:       enc.RatchetCT,
+		CipherText:      enc.Ciphertext,
+	})
+	return MarshalSignedMessage(inner, enc.HMACKey, s.AD, s.InitiatorSigningKeyBytes, s.ResponderSigningKeyBytes), nil
+}
+
+// Open verifies and decrypts a wire frame produced by the remote side's Seal.
+// Returns the plaintext or an error if authentication fails, the ratchet state
+// is inconsistent, or the message is a duplicate.
+func (s *Session) Open(wireBytes []byte) ([]byte, error) {
+	msg, err := UnmarshalSignedMessage(wireBytes)
+	if err != nil {
+		return nil, err
+	}
+	return s.DecryptSignedMessage(msg)
+}
+
 // EncryptMessage encrypts plaintext, advancing the ratchet if necessary.
 func (s *Session) EncryptMessage(plaintext []byte) (*EncryptResult, error) {
 	return s.encryptMessage(plaintext, rand.Reader)
