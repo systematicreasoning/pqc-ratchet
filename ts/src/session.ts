@@ -214,6 +214,24 @@ export class Session {
   }
 
   private async createSendingChain(remoteRatchetPub: Uint8Array): Promise<{ sendingChain: SymmetricChain; ratchetCT: Uint8Array }> {
+    // Rotate our own ratchet keypair before each new sending epoch.
+    //
+    // This is the CKA-S (sender) step from ACD19: the sender generates a fresh
+    // ML-KEM-768 + X25519 keypair on every direction change.  The new public key
+    // (this.ratchetKP.publicKey) is sent to the recipient as newRatchetPub so they
+    // can encapsulate against it in their own next sending epoch.
+    //
+    // Without this rotation both sides keep advertising the same ratchet pub
+    // forever: the X3DH ephemeral key never changes, isNewEpoch never fires on
+    // the recipient, and the ratchet is effectively stuck after the first exchange.
+    const oldKP = this.ratchetKP;
+    this.ratchetKP = generateKEMKeyPair();
+    zeroKEMKeyPair(oldKP);
+
+    // Encapsulate against the REMOTE's current ratchet public key.
+    // The resulting ratchetCT is sent along with newRatchetPub so the recipient
+    // can (a) derive the shared secret for the new receiving chain, and (b) know
+    // our new public key to encapsulate against for their own next epoch.
     const { ciphertext: ratchetCT, sharedSecret: ss } = await encapsulate(remoteRatchetPub);
     const sendingChain = await this.advanceRootKey(ss);
     return { sendingChain, ratchetCT };
